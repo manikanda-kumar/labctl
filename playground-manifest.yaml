@@ -1,0 +1,119 @@
+kind: playground
+name: coding-agent-playground
+title: Coding Agent Development Environment
+description: Playground with AI provider API keys and GitHub CLI configured
+
+playground:
+  machines:
+    - name: dev-machine
+      kernel:
+        source: ubuntu-22.04
+      users:
+        - name: root
+          default: true
+
+      # Pre-create configuration files with placeholder tokens
+      startupFiles:
+        # Anthropic Claude API config
+        - path: /root/.anthropic/config.json
+          content: |
+            {
+              "api_key": "${ANTHROPIC_API_KEY}"
+            }
+          mode: "0600"
+          owner: root
+
+        # OpenAI API config
+        - path: /root/.openai/config.json
+          content: |
+            {
+              "api_key": "${OPENAI_API_KEY}"
+            }
+          mode: "0600"
+          owner: root
+
+        # GitHub token (will be used by gh CLI)
+        - path: /root/.github_token
+          content: "${GITHUB_TOKEN}"
+          mode: "0600"
+          owner: root
+
+        # Environment variables setup script
+        - path: /root/.env_secrets
+          content: |
+            # AI Provider API Keys
+            export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}"
+            export OPENAI_API_KEY="${OPENAI_API_KEY}"
+            export GITHUB_TOKEN="${GITHUB_TOKEN}"
+          mode: "0600"
+          owner: root
+
+        # Add to bashrc to load on every shell
+        - path: /root/.bashrc
+          content: |
+            # Load API keys and tokens
+            if [ -f ~/.env_secrets ]; then
+                source ~/.env_secrets
+            fi
+          mode: "0644"
+          owner: root
+          append: true
+
+  initTasks:
+    # Install GitHub CLI
+    install-gh-cli:
+      name: install-gh-cli
+      machine: dev-machine
+      init: true
+      user: root
+      timeout_seconds: 300
+      run: |
+        set -e
+        # Install gh CLI
+        curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+        chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+        apt-get update
+        apt-get install -y gh
+
+    # Configure GitHub CLI authentication
+    setup-gh-auth:
+      name: setup-gh-auth
+      machine: dev-machine
+      init: true
+      user: root
+      needs:
+        - install-gh-cli
+      timeout_seconds: 60
+      run: |
+        set -e
+        # Authenticate gh CLI with token
+        if [ -f /root/.github_token ] && [ -s /root/.github_token ]; then
+            gh auth login --with-token < /root/.github_token
+            gh auth status
+            echo "GitHub CLI authenticated successfully"
+        else
+            echo "WARNING: No GitHub token found. Please set GITHUB_TOKEN"
+        fi
+
+    # Install common development tools
+    install-dev-tools:
+      name: install-dev-tools
+      machine: dev-machine
+      init: true
+      user: root
+      timeout_seconds: 300
+      run: |
+        set -e
+        apt-get update
+        apt-get install -y curl wget git jq vim nano python3 python3-pip
+
+  # Tab configuration for web UI
+  tabs:
+    - kind: terminal
+      name: Terminal
+      machine: dev-machine
+
+  # Access control
+  accessControl:
+    visibility: private
