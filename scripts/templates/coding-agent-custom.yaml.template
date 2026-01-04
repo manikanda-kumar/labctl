@@ -1,0 +1,252 @@
+kind: playground
+name: coding-agent-custom-${PLAYGROUND_NAME}
+title: Coding Agent Custom (${PLAYGROUND_NAME})
+description: Custom coding agent playground with tools and pre-configured API keys
+base: coding-agent-base
+playground:
+    machines:
+        - name: base-01
+          startupFiles:
+            # Existing from base (preserved)
+            - path: /home/laborant/.bashrc
+              content: |-
+                mkdir -p $HOME/workspace
+                cd $HOME/workspace
+              mode: ""
+              owner: ""
+              append: true
+
+            # API Keys - Secure files with restricted permissions
+            - path: /home/laborant/.config/anthropic/key
+              content: ${ANTHROPIC_KEY}
+              mode: "0600"
+              owner: "laborant:laborant"
+              append: false
+
+            - path: /home/laborant/.config/openai/key
+              content: ${OPENAI_KEY}
+              mode: "0600"
+              owner: "laborant:laborant"
+              append: false
+
+            - path: /home/laborant/.config/github/token
+              content: ${GITHUB_TOKEN}
+              mode: "0600"
+              owner: "laborant:laborant"
+              append: false
+
+            # Tool config files
+            - path: /home/laborant/.github_token
+              content: ${GITHUB_TOKEN}
+              mode: "0600"
+              owner: "laborant:laborant"
+              append: false
+
+            # ghcli config
+            - path: /home/laborant/.config/gh/config.yml
+              content: |
+                hosts:
+                  github.com:
+                    oauth_token: ${GITHUB_TOKEN}
+                    git_protocol: ssh
+              mode: "0600"
+              owner: "laborant:laborant"
+              append: false
+
+    initTasks:
+        # Install basic tools
+        020_install_tools:
+            name: 020_install_tools
+            machine: base-01
+            init: true
+            user: root
+            timeout_seconds: 600
+            run: |-
+                set -e
+                apt-get update -qq
+                apt-get install -y -qq \
+                    curl \
+                    wget \
+                    git \
+                    zsh \
+                    gh \
+                    jq \
+                    yq \
+                    ripgrep \
+                    bat \
+                    unzip \
+                    ca-certificates
+
+        # Install oh-my-zsh
+        030_install_omz:
+            name: 030_install_omz
+            machine: base-01
+            init: true
+            user: laborant
+            needs:
+                - 020_install_tools
+            timeout_seconds: 300
+            run: |-
+                set -e
+                if [ ! -d "$HOME/.oh-my-zsh" ]; then
+                    sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+                fi
+
+        # Configure zsh and set as default shell
+        040_configure_zsh:
+            name: 040_configure_zsh
+            machine: base-01
+            init: true
+            user: root
+            needs:
+                - 020_install_tools
+                - 030_install_omz
+            timeout_seconds: 60
+            run: |-
+                set -e
+                usermod -s "$(which zsh)" laborant
+
+        # Install zsh plugins (zsh-autosuggestions, zsh-syntax-highlighting)
+        050_install_zsh_plugins:
+            name: 050_install_zsh_plugins
+            machine: base-01
+            init: true
+            user: laborant
+            needs:
+                - 030_install_omz
+            timeout_seconds: 120
+            run: |-
+                set -e
+                ZSH_CUSTOM="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}"
+
+                if [ ! -d "$ZSH_CUSTOM/plugins/zsh-autosuggestions" ]; then
+                    git clone https://github.com/zsh-users/zsh-autosuggestions "$ZSH_CUSTOM/plugins/zsh-autosuggestions"
+                fi
+
+                if [ ! -d "$ZSH_CUSTOM/plugins/zsh-syntax-highlighting" ]; then
+                    git clone https://github.com/zsh-users/zsh-syntax-highlighting "$ZSH_CUSTOM/plugins/zsh-syntax-highlighting"
+                fi
+
+        # Configure .zshrc with plugins
+        060_configure_zshrc:
+            name: 060_configure_zshrc
+            machine: base-01
+            init: true
+            user: laborant
+            needs:
+                - 050_install_zsh_plugins
+            timeout_seconds: 60
+            run: |-
+                set -e
+                sed -i 's/plugins=(git)/plugins=(git zsh-autosuggestions zsh-syntax-highlighting)/' "$HOME/.zshrc"
+
+        # Setup gh cli with token
+        070_setup_ghcli:
+            name: 070_setup_ghcli
+            machine: base-01
+            init: true
+            user: laborant
+            needs:
+                - 020_install_tools
+            timeout_seconds: 60
+            run: |-
+                set -e
+                if [ -f "$HOME/.github_token" ]; then
+                    gh auth setup-git --hostname github.com || true
+                fi
+
+        # Install Tailscale
+        080_install_tailscale:
+            name: 080_install_tailscale
+            machine: base-01
+            init: true
+            user: root
+            needs:
+                - 020_install_tools
+            timeout_seconds: 300
+            run: |-
+                set -e
+                if ! command -v tailscale &> /dev/null; then
+                    curl -fsSL https://tailscale.com/install.sh | sh
+                fi
+
+        # Install Chrome Headless (for agent testing)
+        090_install_chrome:
+            name: 090_install_chrome
+            machine: base-01
+            init: true
+            user: root
+            needs:
+                - 020_install_tools
+            timeout_seconds: 300
+            run: |-
+                set -e
+                if ! command -v google-chrome &> /dev/null; then
+                    wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/googlechrome-linux-keyring.gpg
+                    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/googlechrome-linux-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list
+                    apt-get update -qq
+                    apt-get install -y -qq google-chrome-stable
+                fi
+
+        # Configure Claude Code with API key
+        100_configure_claude:
+            name: 100_configure_claude
+            machine: base-01
+            init: true
+            user: laborant
+            needs:
+                - 020_install_tools
+            timeout_seconds: 60
+            run: |-
+                set -e
+                mkdir -p "$HOME/.config/anthropic"
+                if [ -f "$HOME/.config/anthropic/key" ] && [ ! -s "$HOME/.config/anthropic/key" ]; then
+                    echo "export ANTHROPIC_API_KEY=\$(cat \$HOME/.config/anthropic/key)" >> "$HOME/.zshrc"
+                fi
+
+        # Configure OpenAI with API key
+        110_configure_openai:
+            name: 110_configure_openai
+            machine: base-01
+            init: true
+            user: laborant
+            needs:
+                - 020_install_tools
+            timeout_seconds: 60
+            run: |-
+                set -e
+                mkdir -p "$HOME/.config/openai"
+                if [ -f "$HOME/.config/openai/key" ] && [ ! -s "$HOME/.config/openai/key" ]; then
+                    echo "export OPENAI_API_KEY=\$(cat \$HOME/.config/openai/key)" >> "$HOME/.zshrc"
+                fi
+
+        # Setup workspace and run existing clone task
+        999_finalize:
+            name: 999_finalize
+            machine: base-01
+            init: true
+            user: laborant
+            needs:
+                - 060_configure_zshrc
+                - 070_setup_ghcli
+                - 100_configure_claude
+                - 110_configure_openai
+            timeout_seconds: 300
+            run: |-
+                set -e
+                # Clone repo if specified via init condition
+                REPO=$(jq -r .Repository /opt/iximiuz-labs/init-conditions.json 2>/dev/null || echo "null")
+
+                if [ -n "$REPO" ] && ! [ "$REPO" = "null" ]; then
+                    mkdir -p $HOME/workspace
+                    cd $HOME/workspace
+                    git clone $REPO .
+                else
+                    mkdir -p $HOME/workspace
+                fi
+
+    initConditions:
+        values:
+            - key: Repository
+              nullable: true
+              options: []

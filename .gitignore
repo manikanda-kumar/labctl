@@ -1,7 +1,11 @@
 *.swp
 *.swo
 
-labctl
+labctl-darwin-*
+*.zip
+
+*.md
+!SETUP.md
 
 dist/
 
